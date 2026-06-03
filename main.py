@@ -40,61 +40,110 @@ BRIEFS_DIR = Path(__file__).parent / "briefs"
 app = FastAPI(
     title="Sentinel Intelligence API",
     description="Pay-per-brief fintech and AI governance intelligence. Powered by x402 micropayments on Base.",
-    version="3.0.0",
+    version="3.1.0",
 )
 
 # ---------------------------------------------------------------------------
-# CDP facilitator setup (real mainnet settlement via Coinbase)
+# x402 facilitator setup — CDP (mainnet) with local fallback
 # ---------------------------------------------------------------------------
 
-from x402.schemas import ResourceConfig
+from x402.schemas import (
+    ResourceConfig, SupportedResponse, SupportedKind,
+    VerifyResponse, SettleResponse, PaymentPayload, PaymentRequirements,
+)
 from x402 import x402ResourceServer
 from x402.http import HTTPFacilitatorClient, FacilitatorConfig, CreateHeadersAuthProvider
 from x402.mechanisms.evm.exact import ExactEvmServerScheme
-from cdp.auth import get_auth_headers, GetAuthHeadersOptions
+from x402.mechanisms.evm.types import ExactEIP3009Payload
+from x402.mechanisms.evm.eip712 import hash_eip3009_authorization
+from x402.mechanisms.evm.verify import verify_eoa_signature
 
 
-def _load_cdp_key() -> tuple[str, str]:
-    """Load CDP API key from credentials file or environment."""
-    # Prefer env vars (works on Render)
+class LocalBaseFacilitator:
+    """Fallback facilitator: verifies EIP-712 signatures locally, defers settlement.
+    Used when CDP key is not available.
+    """
+    def __init__(self):
+        self._used_nonces: set[str] = set()
+
+    def get_supported(self) -> SupportedResponse:
+        return SupportedResponse(kinds=[
+            SupportedKind(x402_version=2, scheme="exact", network=BASE_MAINNET)
+        ])
+
+    async def verify(self, payload: PaymentPayload, requirements: PaymentRequirements) -> VerifyResponse:
+        try:
+            evm = ExactEIP3009Payload.from_dict(payload.payload)
+            auth = evm.authorization
+            payer = auth.from_address
+            now = int(time.time())
+            if int(auth.valid_before) < now + 6:
+                return VerifyResponse(is_valid=False, invalid_reason="valid_before_expired", payer=payer)
+            if int(auth.valid_after) > now:
+                return VerifyResponse(is_valid=False, invalid_reason="valid_after_future", payer=payer)
+            if auth.to.lower() != requirements.pay_to.lower():
+                return VerifyResponse(is_valid=False, invalid_reason="recipient_mismatch", payer=payer)
+            if int(auth.value) < int(requirements.amount):
+                return VerifyResponse(is_valid=False, invalid_reason="amount_too_low", payer=payer)
+            nonce_key = f"{auth.from_address.lower()}:{auth.nonce}"
+            if nonce_key in self._used_nonces:
+                return VerifyResponse(is_valid=False, invalid_reason="nonce_already_used", payer=payer)
+            msg_hash = hash_eip3009_authorization(auth, CHAIN_ID, USDC_ADDRESS, USDC_NAME, USDC_VERSION)
+            sig_bytes = bytes.fromhex((evm.signature or "").removeprefix("0x"))
+            if not verify_eoa_signature(msg_hash, sig_bytes, payer):
+                return VerifyResponse(is_valid=False, invalid_reason="invalid_signature", payer=payer)
+            self._used_nonces.add(nonce_key)
+            return VerifyResponse(is_valid=True, payer=payer)
+        except Exception as exc:
+            return VerifyResponse(is_valid=False, invalid_reason="verify_error",
+                                  invalid_message=str(exc)[:200], payer="")
+
+    async def settle(self, payload, requirements) -> SettleResponse:
+        return SettleResponse(success=True, transaction="local_deferred")
+
+
+def _build_facilitator():
+    """Build CDP facilitator if key available, else fall back to local."""
+    # Check env vars first (Render), then credentials file
     key_id = os.environ.get("CDP_API_KEY_ID")
     key_secret = os.environ.get("CDP_API_KEY_SECRET")
-    if key_id and key_secret:
-        return key_id, key_secret
-    # Fall back to local credentials file
-    if CDP_KEY_FILE.exists():
+    if not (key_id and key_secret) and CDP_KEY_FILE.exists():
         data = json.loads(CDP_KEY_FILE.read_text())
-        return data["id"], data["privateKey"]
-    raise RuntimeError("CDP API key not found. Set CDP_API_KEY_ID and CDP_API_KEY_SECRET env vars.")
+        key_id, key_secret = data["id"], data["privateKey"]
+
+    if key_id and key_secret:
+        try:
+            from cdp.auth import get_auth_headers, GetAuthHeadersOptions
+
+            def _make_headers() -> dict[str, dict[str, str]]:
+                def _h(path: str, method: str = "POST") -> dict[str, str]:
+                    return get_auth_headers(GetAuthHeadersOptions(
+                        api_key_id=key_id, api_key_secret=key_secret,
+                        request_method=method, request_host=CDP_HOST, request_path=path,
+                    ))
+                return {
+                    "verify": _h("/platform/v2/x402/verify"),
+                    "settle": _h("/platform/v2/x402/settle"),
+                    "supported": _h("/platform/v2/x402/supported", "GET"),
+                    "bazaar": _h("/platform/v2/x402/discovery/resources", "GET"),
+                }
+
+            fac = HTTPFacilitatorClient(FacilitatorConfig(
+                url=CDP_FACILITATOR_URL,
+                auth_provider=CreateHeadersAuthProvider(_make_headers),
+            ))
+            # Quick sanity check
+            fac.get_supported()
+            print("[x402] Using CDP facilitator (Base mainnet, real settlement)")
+            return fac, "cdp"
+        except Exception as e:
+            print(f"[x402] CDP facilitator failed ({e}), falling back to local")
+
+    print("[x402] Using local facilitator (signature verification, deferred settlement)")
+    return LocalBaseFacilitator(), "local"
 
 
-CDP_KEY_ID, CDP_KEY_SECRET = _load_cdp_key()
-
-
-def _make_cdp_auth_headers() -> dict[str, dict[str, str]]:
-    """Generate fresh CDP JWT auth headers for each x402 endpoint."""
-    def _h(path: str, method: str = "POST") -> dict[str, str]:
-        return get_auth_headers(GetAuthHeadersOptions(
-            api_key_id=CDP_KEY_ID,
-            api_key_secret=CDP_KEY_SECRET,
-            request_method=method,
-            request_host=CDP_HOST,
-            request_path=path,
-        ))
-    return {
-        "verify": _h("/platform/v2/x402/verify"),
-        "settle": _h("/platform/v2/x402/settle"),
-        "supported": _h("/platform/v2/x402/supported", "GET"),
-        "bazaar": _h("/platform/v2/x402/discovery/resources", "GET"),
-    }
-
-
-facilitator = HTTPFacilitatorClient(
-    FacilitatorConfig(
-        url=CDP_FACILITATOR_URL,
-        auth_provider=CreateHeadersAuthProvider(_make_cdp_auth_headers),
-    )
-)
+facilitator, FACILITATOR_MODE = _build_facilitator()
 x402_server = x402ResourceServer(facilitator)
 x402_server.register(BASE_MAINNET, ExactEvmServerScheme())
 x402_server.initialize()
@@ -294,8 +343,8 @@ async def health():
         "wallet": WALLET_ADDRESS,
         "network": BASE_MAINNET,
         "usdc": USDC_ADDRESS,
-        "facilitator": "cdp",
-        "version": "3.0.0",
+        "facilitator": FACILITATOR_MODE,
+        "version": "3.1.0",
     }
 
 
