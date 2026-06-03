@@ -40,7 +40,7 @@ BRIEFS_DIR = Path(__file__).parent / "briefs"
 app = FastAPI(
     title="Sentinel Intelligence API",
     description="Pay-per-brief fintech and AI governance intelligence. Powered by x402 micropayments on Base.",
-    version="3.1.0",
+    version="3.2.0",
 )
 
 # ---------------------------------------------------------------------------
@@ -102,8 +102,12 @@ class LocalBaseFacilitator:
         return SettleResponse(success=True, transaction="local_deferred")
 
 
+FACILITATOR_INIT_ERROR: str | None = None
+
+
 def _build_facilitator():
     """Build CDP facilitator if key available, else fall back to local."""
+    global FACILITATOR_INIT_ERROR
     # Check env vars first (Render), then credentials file
     # Support both naming conventions (underscores or none)
     key_id = os.environ.get("CDP_API_KEY_ID") or os.environ.get("CDPAPIKEYID")
@@ -112,7 +116,13 @@ def _build_facilitator():
         data = json.loads(CDP_KEY_FILE.read_text())
         key_id, key_secret = data["id"], data["privateKey"]
 
-    if key_id and key_secret:
+    if not key_id:
+        FACILITATOR_INIT_ERROR = "no_key_id: CDP_API_KEY_ID and CDPAPIKEYID both missing from env"
+        print(f"[x402] {FACILITATOR_INIT_ERROR}")
+    elif not key_secret:
+        FACILITATOR_INIT_ERROR = "no_key_secret: CDP_API_KEY_SECRET and CDPAPIKEYSECRET both missing from env"
+        print(f"[x402] {FACILITATOR_INIT_ERROR}")
+    else:
         try:
             from cdp.auth import get_auth_headers, GetAuthHeadersOptions
 
@@ -138,7 +148,8 @@ def _build_facilitator():
             print("[x402] Using CDP facilitator (Base mainnet, real settlement)")
             return fac, "cdp"
         except Exception as e:
-            print(f"[x402] CDP facilitator failed ({e}), falling back to local")
+            FACILITATOR_INIT_ERROR = f"{type(e).__name__}: {str(e)[:300]}"
+            print(f"[x402] CDP facilitator failed ({FACILITATOR_INIT_ERROR}), falling back to local")
 
     print("[x402] Using local facilitator (signature verification, deferred settlement)")
     return LocalBaseFacilitator(), "local"
@@ -337,7 +348,7 @@ async def x402_discovery():
 
 @app.get("/health")
 async def health():
-    return {
+    resp = {
         "status": "ok",
         "service": "Sentinel Intelligence API",
         "timestamp": datetime.utcnow().isoformat(),
@@ -345,8 +356,18 @@ async def health():
         "network": BASE_MAINNET,
         "usdc": USDC_ADDRESS,
         "facilitator": FACILITATOR_MODE,
-        "version": "3.1.0",
+        "version": "3.2.0",
     }
+    if FACILITATOR_INIT_ERROR:
+        resp["facilitator_init_error"] = FACILITATOR_INIT_ERROR
+    # Expose which env var names were found (not values) to help diagnose key pickup
+    resp["env_key_id_found"] = bool(
+        os.environ.get("CDP_API_KEY_ID") or os.environ.get("CDPAPIKEYID")
+    )
+    resp["env_key_secret_found"] = bool(
+        os.environ.get("CDP_API_KEY_SECRET") or os.environ.get("CDPAPIKEYSECRET")
+    )
+    return resp
 
 
 @app.get("/brief/bnpl")
