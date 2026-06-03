@@ -22,7 +22,7 @@ from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse
 from pydantic import BaseModel
 from x402 import x402ResourceServer, ResourceConfig
-from x402.http import HTTPFacilitatorClient
+from x402.http import HTTPFacilitatorClient, FacilitatorConfig
 from x402.mechanisms.evm.exact import ExactEvmServerScheme
 
 # ---------------------------------------------------------------------------
@@ -30,7 +30,9 @@ from x402.mechanisms.evm.exact import ExactEvmServerScheme
 # ---------------------------------------------------------------------------
 
 WALLET_ADDRESS = "0xAFAd5fBF0Ad891385019092CE9c2eAd12F912A37"
-BASE_NETWORK = "eip155:8453"  # Base mainnet
+# Base Sepolia testnet — x402.org free facilitator supports testnet only.
+# Switch to eip155:8453 (mainnet) once Coinbase CDP facilitator is configured.
+BASE_NETWORK = "eip155:84532"
 BRIEFS_DIR = Path(__file__).parent / "briefs"
 
 app = FastAPI(
@@ -43,9 +45,9 @@ app = FastAPI(
 # x402 setup
 # ---------------------------------------------------------------------------
 
-facilitator = HTTPFacilitatorClient(url="https://x402.org/facilitator")
+facilitator = HTTPFacilitatorClient(FacilitatorConfig(url="https://x402.org/facilitator"))
 x402_server = x402ResourceServer(facilitator)
-x402_server.register("eip155:*", ExactEvmServerScheme())
+x402_server.register("eip155:84532", ExactEvmServerScheme())  # Base Sepolia
 x402_server.initialize()
 
 
