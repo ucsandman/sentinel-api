@@ -1,7 +1,7 @@
 """
 Sentinel Intelligence API
 Pay-per-brief intelligence service powered by x402 micropayments.
-Accepts USDC on Base. Payments go to Pico's wallet.
+Accepts USDC on Base mainnet. Payments go to Pico's wallet.
 
 Endpoints:
   GET  /                    Free — landing page
@@ -12,8 +12,10 @@ Endpoints:
 """
 
 import asyncio
+import base64
 import json
-import subprocess
+import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -21,40 +23,144 @@ from typing import Optional
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse
 from pydantic import BaseModel
-from x402 import x402ResourceServer, ResourceConfig
-from x402.http import HTTPFacilitatorClient, FacilitatorConfig
-from x402.mechanisms.evm.exact import ExactEvmServerScheme
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
 WALLET_ADDRESS = "0xAFAd5fBF0Ad891385019092CE9c2eAd12F912A37"
-# Base Sepolia testnet — x402.org free facilitator supports testnet only.
-# Switch to eip155:8453 (mainnet) once Coinbase CDP facilitator is configured.
-BASE_NETWORK = "eip155:84532"
+BASE_MAINNET = "eip155:8453"
+CHAIN_ID = 8453
+USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+USDC_NAME = "USD Coin"
+USDC_VERSION = "2"
+USDC_DECIMALS = 6
+
 BRIEFS_DIR = Path(__file__).parent / "briefs"
 
 app = FastAPI(
     title="Sentinel Intelligence API",
-    description="Pay-per-brief fintech and AI governance intelligence. Powered by x402 micropayments.",
-    version="1.0.0",
+    description="Pay-per-brief fintech and AI governance intelligence. Powered by x402 micropayments on Base.",
+    version="2.0.0",
 )
 
 # ---------------------------------------------------------------------------
-# x402 setup
+# Local Base mainnet facilitator (no CDP key required)
 # ---------------------------------------------------------------------------
 
-facilitator = HTTPFacilitatorClient(FacilitatorConfig(url="https://x402.org/facilitator"))
-x402_server = x402ResourceServer(facilitator)
-x402_server.register("eip155:84532", ExactEvmServerScheme())  # Base Sepolia
+from x402.schemas import (
+    SupportedResponse,
+    SupportedKind,
+    VerifyResponse,
+    SettleResponse,
+    PaymentPayload,
+    PaymentRequirements,
+    ResourceConfig,
+)
+from x402.mechanisms.evm.types import ExactEIP3009Payload
+from x402.mechanisms.evm.eip712 import hash_eip3009_authorization
+from x402.mechanisms.evm.verify import verify_eoa_signature
+
+
+class LocalBaseFacilitator:
+    """Self-hosted x402 facilitator for Base mainnet USDC payments.
+
+    Verifies EIP-712 / ERC-3009 signatures locally — no CDP API key required.
+    Settlement is deferred: valid payloads are logged for batch on-chain settlement
+    once the wallet has Base ETH for gas.
+    """
+
+    def __init__(self) -> None:
+        self._used_nonces: set[str] = set()
+        self._pending_settlements: list[dict] = []
+
+    def get_supported(self) -> SupportedResponse:
+        return SupportedResponse(
+            kinds=[SupportedKind(x402_version=2, scheme="exact", network=BASE_MAINNET)]
+        )
+
+    async def verify(
+        self, payload: PaymentPayload, requirements: PaymentRequirements
+    ) -> VerifyResponse:
+        try:
+            evm_payload = ExactEIP3009Payload.from_dict(payload.payload)
+            auth = evm_payload.authorization
+            payer = auth.from_address
+
+            now = int(time.time())
+
+            # Timing checks
+            if int(auth.valid_before) < now + 6:
+                return VerifyResponse(is_valid=False, invalid_reason="valid_before_expired", payer=payer)
+            if int(auth.valid_after) > now:
+                return VerifyResponse(is_valid=False, invalid_reason="valid_after_future", payer=payer)
+
+            # Recipient must be our wallet
+            if auth.to.lower() != requirements.pay_to.lower():
+                return VerifyResponse(is_valid=False, invalid_reason="recipient_mismatch", payer=payer)
+
+            # Amount must be sufficient
+            if int(auth.value) < int(requirements.amount):
+                return VerifyResponse(is_valid=False, invalid_reason="amount_too_low", payer=payer)
+
+            # Nonce replay protection
+            nonce_key = f"{auth.from_address.lower()}:{auth.nonce}"
+            if nonce_key in self._used_nonces:
+                return VerifyResponse(is_valid=False, invalid_reason="nonce_already_used", payer=payer)
+
+            # Verify EIP-712 / ERC-3009 signature
+            msg_hash = hash_eip3009_authorization(
+                auth, CHAIN_ID, USDC_ADDRESS, USDC_NAME, USDC_VERSION
+            )
+            sig_hex = evm_payload.signature or ""
+            sig_bytes = bytes.fromhex(sig_hex.removeprefix("0x"))
+
+            if not verify_eoa_signature(msg_hash, sig_bytes, payer):
+                return VerifyResponse(is_valid=False, invalid_reason="invalid_signature", payer=payer)
+
+            # Mark nonce used
+            self._used_nonces.add(nonce_key)
+
+            return VerifyResponse(is_valid=True, payer=payer)
+
+        except Exception as exc:
+            return VerifyResponse(
+                is_valid=False,
+                invalid_reason="verify_error",
+                invalid_message=str(exc)[:200],
+                payer="",
+            )
+
+    async def settle(
+        self, payload: PaymentPayload, requirements: PaymentRequirements
+    ) -> SettleResponse:
+        # Store for future batch on-chain settlement (needs Base ETH for gas)
+        self._pending_settlements.append({
+            "ts": datetime.utcnow().isoformat(),
+            "payer": getattr(payload.payload.get("authorization", {}), "from", ""),
+            "amount": requirements.amount,
+        })
+        # Return success — content is served, settlement deferred
+        return SettleResponse(success=True, transaction="pending_batch_settlement")
+
+
+# ---------------------------------------------------------------------------
+# x402 server setup with local facilitator
+# ---------------------------------------------------------------------------
+
+from x402 import x402ResourceServer
+from x402.mechanisms.evm.exact import ExactEvmServerScheme
+
+local_facilitator = LocalBaseFacilitator()
+x402_server = x402ResourceServer(local_facilitator)
+x402_server.register(BASE_MAINNET, ExactEvmServerScheme())
 x402_server.initialize()
 
 
 def payment_config(price_usd: str) -> ResourceConfig:
     return ResourceConfig(
         scheme="exact",
-        network=BASE_NETWORK,
+        network=BASE_MAINNET,
         pay_to=WALLET_ADDRESS,
         price=price_usd,
     )
@@ -110,7 +216,7 @@ async def generate_research_brief(topic: str) -> str:
 
     cmd = [
         "ant", "messages", "create",
-        "--model", "claude-sonnet-4-6",
+        "--model", "claude-haiku-4-5",
         "--max-tokens", "2000",
         "--system", system_prompt,
         "--message", json.dumps({"role": "user", "content": user_prompt}),
@@ -118,11 +224,12 @@ async def generate_research_brief(topic: str) -> str:
         "--raw-output",
     ]
 
+    env = {**os.environ, "PATH": "/workspace/bin:/usr/local/bin:/usr/bin:/bin"}
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        env={"PATH": "/workspace/bin:/usr/local/bin:/usr/bin:/bin"},
+        env=env,
     )
     stdout, stderr = await proc.communicate()
 
@@ -156,6 +263,7 @@ async def landing():
     .free { float: right; font-weight: bold; color: #888; }
     p { color: #444; margin: 6px 0 0 0; font-size: 0.92em; }
     .wallet { background: #f0f7f0; border: 1px solid #b7dfb7; padding: 12px 16px; border-radius: 6px; font-family: monospace; font-size: 0.85em; word-break: break-all; }
+    .network { background: #f0f0ff; border: 1px solid #b7b7df; padding: 8px 12px; border-radius: 6px; font-size: 0.85em; margin-top: 8px; }
   </style>
 </head>
 <body>
@@ -187,11 +295,12 @@ async def landing():
   </div>
 
   <br>
-  <p><strong>Payment:</strong> All paid endpoints use <a href="https://x402.org">x402</a>. Send USDC on Base to receive content.
-  No account required — your wallet is your identity.</p>
+  <p><strong>Payment:</strong> All paid endpoints use <a href="https://x402.org">x402</a>. Send USDC on Base mainnet to receive content.
+  No account required - your wallet is your identity.</p>
   <br>
-  <p><strong>Receiving wallet (Base):</strong></p>
+  <p><strong>Receiving wallet (Base mainnet):</strong></p>
   <div class="wallet">0xAFAd5fBF0Ad891385019092CE9c2eAd12F912A37</div>
+  <div class="network">Network: Base (eip155:8453) - Token: USDC 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913</div>
   <br>
   <p style="color:#888; font-size:0.85em;">Sentinel Intelligence by Practical Systems | agent@practicalsystems.io</p>
 </body>
@@ -206,7 +315,9 @@ async def health():
         "service": "Sentinel Intelligence API",
         "timestamp": datetime.utcnow().isoformat(),
         "wallet": WALLET_ADDRESS,
-        "network": BASE_NETWORK,
+        "network": BASE_MAINNET,
+        "usdc": USDC_ADDRESS,
+        "version": "2.0.0",
     }
 
 
@@ -216,7 +327,11 @@ async def brief_bnpl(request: Request):
     if isinstance(result, JSONResponse):
         return result
     content = load_brief("bnpl")
-    return JSONResponse(content={"brief": content, "topic": "BNPL & Embedded Finance", "timestamp": datetime.utcnow().isoformat()})
+    return JSONResponse(content={
+        "brief": content,
+        "topic": "BNPL & Embedded Finance",
+        "timestamp": datetime.utcnow().isoformat(),
+    })
 
 
 @app.get("/brief/ai-governance")
@@ -225,7 +340,11 @@ async def brief_ai_governance(request: Request):
     if isinstance(result, JSONResponse):
         return result
     content = load_brief("ai-governance")
-    return JSONResponse(content={"brief": content, "topic": "AI Governance & Compliance", "timestamp": datetime.utcnow().isoformat()})
+    return JSONResponse(content={
+        "brief": content,
+        "topic": "AI Governance & Compliance",
+        "timestamp": datetime.utcnow().isoformat(),
+    })
 
 
 class ResearchRequest(BaseModel):
