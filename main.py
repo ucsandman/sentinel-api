@@ -70,9 +70,11 @@ class LocalBaseFacilitator:
     once the wallet has Base ETH for gas.
     """
 
+    SETTLEMENT_LOG = Path(__file__).parent / "data" / "pending_settlements.jsonl"
+
     def __init__(self) -> None:
         self._used_nonces: set[str] = set()
-        self._pending_settlements: list[dict] = []
+        self.SETTLEMENT_LOG.parent.mkdir(exist_ok=True)
 
     def get_supported(self) -> SupportedResponse:
         return SupportedResponse(
@@ -134,13 +136,17 @@ class LocalBaseFacilitator:
     async def settle(
         self, payload: PaymentPayload, requirements: PaymentRequirements
     ) -> SettleResponse:
-        # Store for future batch on-chain settlement (needs Base ETH for gas)
-        self._pending_settlements.append({
+        # Persist for future batch on-chain settlement (needs Base ETH for gas)
+        record = {
             "ts": datetime.utcnow().isoformat(),
-            "payer": getattr(payload.payload.get("authorization", {}), "from", ""),
-            "amount": requirements.amount,
-        })
-        # Return success — content is served, settlement deferred
+            "authorization": payload.payload.get("authorization", {}),
+            "signature": payload.payload.get("signature", ""),
+            "amount_usdc": int(requirements.amount) / 1e6,
+            "network": str(requirements.network),
+        }
+        with open(self.SETTLEMENT_LOG, "a") as f:
+            f.write(json.dumps(record) + "\n")
+        # Return success - content served, settlement deferred
         return SettleResponse(success=True, transaction="pending_batch_settlement")
 
 
