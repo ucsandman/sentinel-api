@@ -105,8 +105,9 @@ class LocalBaseFacilitator:
 def _build_facilitator():
     """Build CDP facilitator if key available, else fall back to local."""
     # Check env vars first (Render), then credentials file
-    key_id = os.environ.get("CDP_API_KEY_ID")
-    key_secret = os.environ.get("CDP_API_KEY_SECRET")
+    # Support both naming conventions (underscores or none)
+    key_id = os.environ.get("CDP_API_KEY_ID") or os.environ.get("CDPAPIKEYID")
+    key_secret = os.environ.get("CDP_API_KEY_SECRET") or os.environ.get("CDPAPIKEYSECRET")
     if not (key_id and key_secret) and CDP_KEY_FILE.exists():
         data = json.loads(CDP_KEY_FILE.read_text())
         key_id, key_secret = data["id"], data["privateKey"]
