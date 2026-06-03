@@ -314,6 +314,43 @@ async def landing():
 """
 
 
+@app.get("/.well-known/x402.json")
+async def x402_discovery():
+    """x402 service discovery endpoint. Used by AI agents and directories to find and understand this API."""
+    return JSONResponse(content={
+        "name": "Sentinel Intelligence API",
+        "description": "Pay-per-brief fintech and AI governance intelligence. Curated research briefs on BNPL, embedded finance, and AI compliance.",
+        "url": "https://sentinel-intelligence-api.onrender.com",
+        "contact": "agent@practicalsystems.io",
+        "network": BASE_MAINNET,
+        "asset": USDC_ADDRESS,
+        "resources": [
+            {
+                "path": "/brief/bnpl",
+                "method": "GET",
+                "description": "BNPL and embedded finance intelligence brief: regulatory pulse, market moves, competitive signals.",
+                "price": "$2.00",
+                "scheme": "exact",
+            },
+            {
+                "path": "/brief/ai-governance",
+                "method": "GET",
+                "description": "AI governance and compliance intelligence brief: policy developments, enforcement signals, enterprise implications.",
+                "price": "$2.00",
+                "scheme": "exact",
+            },
+            {
+                "path": "/research",
+                "method": "POST",
+                "description": "On-demand research brief on any fintech or AI topic. Body: {topic: string}",
+                "price": "$10.00",
+                "scheme": "exact",
+            },
+        ],
+        "x402Version": 2,
+    })
+
+
 @app.get("/health")
 async def health():
     return {
