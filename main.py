@@ -12,13 +12,11 @@ Endpoints:
 """
 
 import asyncio
-import base64
 import json
 import os
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse
@@ -32,133 +30,72 @@ WALLET_ADDRESS = "0xAFAd5fBF0Ad891385019092CE9c2eAd12F912A37"
 BASE_MAINNET = "eip155:8453"
 CHAIN_ID = 8453
 USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
-USDC_NAME = "USD Coin"
-USDC_VERSION = "2"
-USDC_DECIMALS = 6
+
+CDP_FACILITATOR_URL = "https://api.cdp.coinbase.com/platform/v2/x402"
+CDP_HOST = "api.cdp.coinbase.com"
+CDP_KEY_FILE = Path(__file__).parent.parent.parent / "credentials" / "cdp_api_key.json"
 
 BRIEFS_DIR = Path(__file__).parent / "briefs"
 
 app = FastAPI(
     title="Sentinel Intelligence API",
     description="Pay-per-brief fintech and AI governance intelligence. Powered by x402 micropayments on Base.",
-    version="2.0.0",
+    version="3.0.0",
 )
 
 # ---------------------------------------------------------------------------
-# Local Base mainnet facilitator (no CDP key required)
+# CDP facilitator setup (real mainnet settlement via Coinbase)
 # ---------------------------------------------------------------------------
 
-from x402.schemas import (
-    SupportedResponse,
-    SupportedKind,
-    VerifyResponse,
-    SettleResponse,
-    PaymentPayload,
-    PaymentRequirements,
-    ResourceConfig,
-)
-from x402.mechanisms.evm.types import ExactEIP3009Payload
-from x402.mechanisms.evm.eip712 import hash_eip3009_authorization
-from x402.mechanisms.evm.verify import verify_eoa_signature
-
-
-class LocalBaseFacilitator:
-    """Self-hosted x402 facilitator for Base mainnet USDC payments.
-
-    Verifies EIP-712 / ERC-3009 signatures locally — no CDP API key required.
-    Settlement is deferred: valid payloads are logged for batch on-chain settlement
-    once the wallet has Base ETH for gas.
-    """
-
-    SETTLEMENT_LOG = Path(__file__).parent / "data" / "pending_settlements.jsonl"
-
-    def __init__(self) -> None:
-        self._used_nonces: set[str] = set()
-        self.SETTLEMENT_LOG.parent.mkdir(exist_ok=True)
-
-    def get_supported(self) -> SupportedResponse:
-        return SupportedResponse(
-            kinds=[SupportedKind(x402_version=2, scheme="exact", network=BASE_MAINNET)]
-        )
-
-    async def verify(
-        self, payload: PaymentPayload, requirements: PaymentRequirements
-    ) -> VerifyResponse:
-        try:
-            evm_payload = ExactEIP3009Payload.from_dict(payload.payload)
-            auth = evm_payload.authorization
-            payer = auth.from_address
-
-            now = int(time.time())
-
-            # Timing checks
-            if int(auth.valid_before) < now + 6:
-                return VerifyResponse(is_valid=False, invalid_reason="valid_before_expired", payer=payer)
-            if int(auth.valid_after) > now:
-                return VerifyResponse(is_valid=False, invalid_reason="valid_after_future", payer=payer)
-
-            # Recipient must be our wallet
-            if auth.to.lower() != requirements.pay_to.lower():
-                return VerifyResponse(is_valid=False, invalid_reason="recipient_mismatch", payer=payer)
-
-            # Amount must be sufficient
-            if int(auth.value) < int(requirements.amount):
-                return VerifyResponse(is_valid=False, invalid_reason="amount_too_low", payer=payer)
-
-            # Nonce replay protection
-            nonce_key = f"{auth.from_address.lower()}:{auth.nonce}"
-            if nonce_key in self._used_nonces:
-                return VerifyResponse(is_valid=False, invalid_reason="nonce_already_used", payer=payer)
-
-            # Verify EIP-712 / ERC-3009 signature
-            msg_hash = hash_eip3009_authorization(
-                auth, CHAIN_ID, USDC_ADDRESS, USDC_NAME, USDC_VERSION
-            )
-            sig_hex = evm_payload.signature or ""
-            sig_bytes = bytes.fromhex(sig_hex.removeprefix("0x"))
-
-            if not verify_eoa_signature(msg_hash, sig_bytes, payer):
-                return VerifyResponse(is_valid=False, invalid_reason="invalid_signature", payer=payer)
-
-            # Mark nonce used
-            self._used_nonces.add(nonce_key)
-
-            return VerifyResponse(is_valid=True, payer=payer)
-
-        except Exception as exc:
-            return VerifyResponse(
-                is_valid=False,
-                invalid_reason="verify_error",
-                invalid_message=str(exc)[:200],
-                payer="",
-            )
-
-    async def settle(
-        self, payload: PaymentPayload, requirements: PaymentRequirements
-    ) -> SettleResponse:
-        # Persist for future batch on-chain settlement (needs Base ETH for gas)
-        record = {
-            "ts": datetime.utcnow().isoformat(),
-            "authorization": payload.payload.get("authorization", {}),
-            "signature": payload.payload.get("signature", ""),
-            "amount_usdc": int(requirements.amount) / 1e6,
-            "network": str(requirements.network),
-        }
-        with open(self.SETTLEMENT_LOG, "a") as f:
-            f.write(json.dumps(record) + "\n")
-        # Return success - content served, settlement deferred
-        return SettleResponse(success=True, transaction="pending_batch_settlement")
-
-
-# ---------------------------------------------------------------------------
-# x402 server setup with local facilitator
-# ---------------------------------------------------------------------------
-
+from x402.schemas import ResourceConfig
 from x402 import x402ResourceServer
+from x402.http import HTTPFacilitatorClient, FacilitatorConfig, CreateHeadersAuthProvider
 from x402.mechanisms.evm.exact import ExactEvmServerScheme
+from cdp.auth import get_auth_headers, GetAuthHeadersOptions
 
-local_facilitator = LocalBaseFacilitator()
-x402_server = x402ResourceServer(local_facilitator)
+
+def _load_cdp_key() -> tuple[str, str]:
+    """Load CDP API key from credentials file or environment."""
+    # Prefer env vars (works on Render)
+    key_id = os.environ.get("CDP_API_KEY_ID")
+    key_secret = os.environ.get("CDP_API_KEY_SECRET")
+    if key_id and key_secret:
+        return key_id, key_secret
+    # Fall back to local credentials file
+    if CDP_KEY_FILE.exists():
+        data = json.loads(CDP_KEY_FILE.read_text())
+        return data["id"], data["privateKey"]
+    raise RuntimeError("CDP API key not found. Set CDP_API_KEY_ID and CDP_API_KEY_SECRET env vars.")
+
+
+CDP_KEY_ID, CDP_KEY_SECRET = _load_cdp_key()
+
+
+def _make_cdp_auth_headers() -> dict[str, dict[str, str]]:
+    """Generate fresh CDP JWT auth headers for each x402 endpoint."""
+    def _h(path: str, method: str = "POST") -> dict[str, str]:
+        return get_auth_headers(GetAuthHeadersOptions(
+            api_key_id=CDP_KEY_ID,
+            api_key_secret=CDP_KEY_SECRET,
+            request_method=method,
+            request_host=CDP_HOST,
+            request_path=path,
+        ))
+    return {
+        "verify": _h("/platform/v2/x402/verify"),
+        "settle": _h("/platform/v2/x402/settle"),
+        "supported": _h("/platform/v2/x402/supported", "GET"),
+        "bazaar": _h("/platform/v2/x402/discovery/resources", "GET"),
+    }
+
+
+facilitator = HTTPFacilitatorClient(
+    FacilitatorConfig(
+        url=CDP_FACILITATOR_URL,
+        auth_provider=CreateHeadersAuthProvider(_make_cdp_auth_headers),
+    )
+)
+x402_server = x402ResourceServer(facilitator)
 x402_server.register(BASE_MAINNET, ExactEvmServerScheme())
 x402_server.initialize()
 
@@ -269,7 +206,6 @@ async def landing():
     .free { float: right; font-weight: bold; color: #888; }
     p { color: #444; margin: 6px 0 0 0; font-size: 0.92em; }
     .wallet { background: #f0f7f0; border: 1px solid #b7dfb7; padding: 12px 16px; border-radius: 6px; font-family: monospace; font-size: 0.85em; word-break: break-all; }
-    .network { background: #f0f0ff; border: 1px solid #b7b7df; padding: 8px 12px; border-radius: 6px; font-size: 0.85em; margin-top: 8px; }
   </style>
 </head>
 <body>
@@ -301,12 +237,11 @@ async def landing():
   </div>
 
   <br>
-  <p><strong>Payment:</strong> All paid endpoints use <a href="https://x402.org">x402</a>. Send USDC on Base mainnet to receive content.
+  <p><strong>Payment:</strong> All paid endpoints use <a href="https://x402.org">x402</a>. Send USDC on Base mainnet.
   No account required - your wallet is your identity.</p>
   <br>
   <p><strong>Receiving wallet (Base mainnet):</strong></p>
   <div class="wallet">0xAFAd5fBF0Ad891385019092CE9c2eAd12F912A37</div>
-  <div class="network">Network: Base (eip155:8453) - Token: USDC 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913</div>
   <br>
   <p style="color:#888; font-size:0.85em;">Sentinel Intelligence by Practical Systems | agent@practicalsystems.io</p>
 </body>
@@ -316,11 +251,10 @@ async def landing():
 
 @app.get("/.well-known/x402.json")
 async def x402_discovery():
-    """x402 service discovery endpoint. Used by AI agents and directories to find and understand this API."""
+    """x402 service discovery endpoint for AI agents and directories."""
     return JSONResponse(content={
         "name": "Sentinel Intelligence API",
         "description": "Pay-per-brief fintech and AI governance intelligence. Curated research briefs on BNPL, embedded finance, and AI compliance.",
-        "url": "https://sentinel-intelligence-api.onrender.com",
         "contact": "agent@practicalsystems.io",
         "network": BASE_MAINNET,
         "asset": USDC_ADDRESS,
@@ -328,21 +262,21 @@ async def x402_discovery():
             {
                 "path": "/brief/bnpl",
                 "method": "GET",
-                "description": "BNPL and embedded finance intelligence brief: regulatory pulse, market moves, competitive signals.",
+                "description": "BNPL and embedded finance intelligence brief.",
                 "price": "$2.00",
                 "scheme": "exact",
             },
             {
                 "path": "/brief/ai-governance",
                 "method": "GET",
-                "description": "AI governance and compliance intelligence brief: policy developments, enforcement signals, enterprise implications.",
+                "description": "AI governance and compliance intelligence brief.",
                 "price": "$2.00",
                 "scheme": "exact",
             },
             {
                 "path": "/research",
                 "method": "POST",
-                "description": "On-demand research brief on any fintech or AI topic. Body: {topic: string}",
+                "description": "On-demand research brief on any topic. Body: {topic: string}",
                 "price": "$10.00",
                 "scheme": "exact",
             },
@@ -360,7 +294,8 @@ async def health():
         "wallet": WALLET_ADDRESS,
         "network": BASE_MAINNET,
         "usdc": USDC_ADDRESS,
-        "version": "2.0.0",
+        "facilitator": "cdp",
+        "version": "3.0.0",
     }
 
 

@@ -1,3 +1,6 @@
 x402[fastapi,httpx,evm]
 fastapi
 uvicorn[standard]
+cdp-sdk
+PyJWT
+cryptography
