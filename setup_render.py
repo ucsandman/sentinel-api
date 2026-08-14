@@ -120,10 +120,12 @@ def diagnose(path: Path | None) -> int:
     print("require a secret key. This service never uses a publishable key at all,")
     print("because Stripe Checkout is a hosted redirect.")
     print("\nGet one at https://dashboard.stripe.com/apikeys")
-    print("Safer option: create a RESTRICTED key (rk_live_) there with")
-    print("  Checkout Sessions: write")
-    print("and give it nothing else. Then add to your secrets file:")
-    print("  STRIPE_SECRET_KEY=rk_live_...")
+    print("Simplest: copy the live secret key (sk_live_) and add to your file:")
+    print("  STRIPE_SECRET_KEY=sk_live_...")
+    print("\nTighter option: create a RESTRICTED key (rk_live_) with")
+    print("  Checkout Sessions: read AND write")
+    print("This service creates a session and later retrieves it to confirm")
+    print("payment, so read-only or write-only will both fail.")
     return 1
 
 
