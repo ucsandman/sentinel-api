@@ -29,6 +29,11 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+# Imported at module level on purpose. If this is missing the app must fail to
+# boot, so the deploy fails and the previous version keeps serving. Importing
+# it lazily would instead 500 a customer who had already paid.
+import markdown
+
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse
 from pydantic import BaseModel
@@ -497,8 +502,6 @@ def wants_html(request: Request) -> bool:
 
 def render_brief_page(slug: str, item: dict) -> str:
     """The page a paying human sees. Previously they got escaped JSON."""
-    import markdown
-
     body_html = markdown.markdown(
         load_brief(slug), extensions=["extra", "sane_lists", "nl2br"]
     )
