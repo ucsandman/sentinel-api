@@ -1,43 +1,41 @@
 # AI Governance & Compliance Intelligence Brief
-**Date:** June 3, 2026 | **By:** Sentinel Intelligence
+
+**Edition:** 2026-08-14 | **By:** Sentinel Intelligence | Every claim links to a primary or named source.
 
 ## Critical Alerts
 
-- **EU AI Act Enforcement Escalation:** European Commission issued first major fines under Article 71 provisions, targeting three LLM providers for inadequate transparency documentation in high-risk applications. Non-compliance penalties now reaching 6% of global revenue, with enforcement expected to intensify across Q3 2026.
+- **The EU transparency duties went live 12 days ago, and they did not slip.** The Digital Omnibus on AI was published in the Official Journal on 24 July 2026 and entered into force on 27 July 2026. It deferred the high-risk regime. It did not defer Article 50. Transparency and AI-content labeling obligations applied from 2 August 2026 as originally scheduled. ([Gibson Dunn](https://www.gibsondunn.com/eu-ai-act-omnibus-agreement-postponed-high-risk-deadlines-and-other-key-changes/), [Jones Walker](https://www.joneswalker.com/en/insights/blogs/ai-law-blog/yes-august-2-still-matters-the-eu-approved-a-high-risk-ai-delay-but-most-trans.html))
 
-- **SEC Chair Signals AI Risk Disclosure Mandate:** During testimony before Congress, SEC leadership indicated imminent proposed rules requiring public companies to disclose material AI model risks, training data provenance, and algorithmic audit findings in 10-K filings. Rule window opens July 2026, with compliance deadline likely Q1 2027.
+- **High-risk moved by 16 months, and by two years for embedded systems.** Standalone Annex III high-risk systems now face 2 December 2027 instead of 2 August 2026. AI embedded in products already covered by EU product-safety law under Annex I moves to 2 August 2028. The stated driver was the unfinished work on national competent authorities and harmonised standards, not a change of policy intent. ([Travers Smith](https://www.traverssmith.com/knowledge/knowledge-container/eu-agrees-to-delay-key-ai-act-compliance-deadlines/), [DLA Piper](https://knowledge.dlapiper.com/dlapiperknowledge/globalemploymentlatestdevelopments/2026/The-Digital-AI-Omnibus-Proposed-deferral-of-high-risk-AI-obligations-under-the-AI-Act))
 
-- **UK FCA Model Risk Management Framework Goes Live:** Financial Conduct Authority published binding expectations for AI model governance in regulated financial services. Institutions must establish independent model validation units by September 2026 or face enforcement action and potential license restrictions.
-
-- **NIST AI RMF 2.0 Adoption Surge in Federal Contracts:** White House directed all federal agencies to require NIST AI Risk Management Framework 2.0 compliance for AI system procurements exceeding $500,000. This affects 40+ agencies and creates immediate demand for third-party assessment providers.
+- **Colorado's high-risk statute is gone, not postponed.** SB 24-205 was delayed from 1 February to 30 June 2026 by SB 25B-004, a federal magistrate stayed enforcement in April 2026, and Governor Polis signed SB 26-189 on 14 May 2026 repealing it outright. The replacement Automated Decision-Making Technology Act takes effect 1 January 2027 and drops the algorithmic discrimination duty in favour of disclosure. If your roadmap still names SB 24-205, it is tracking a dead law. ([Akin](https://www.akingump.com/en/insights/ai-law-and-regulation-tracker/colorado-postpones-implementation-of-colorado-ai-act-sb-24-205), [Colorado General Assembly, SB25B-004](https://leg.colorado.gov/bills/sb25b-004))
 
 ## Regulatory Pulse
 
-- **FTC Enforcement Against Synthetic Media Without Consent:** FTC filed cease-and-desist orders against four companies using unauthorized deepfakes in advertising. Penalty framework now includes civil penalties up to $43,792 per violation, establishing precedent for AI-generated content liability across consumer-facing sectors.
+- **The pattern is consistent across three jurisdictions: comprehensive high-risk regimes slip, narrow duties bind.** The EU deferred high-risk and kept transparency. Colorado repealed high-risk and kept disclosure. Texas passed TRAIGA as a short list of banned uses plus state-government rules rather than a broad high-risk regime, effective 1 January 2026. ([Miller Nash](https://www.millernash.com/industry-news/from-colorado-to-texas-how-states-are-rewriting-ai-laws), [King & Spalding](https://www.kslaw.com/news-and-insights/new-state-ai-laws-are-effective-on-january-1-2026-but-a-new-executive-order-signals-disruption))
 
-- **GDPR Article 5 Interpretation Update:** European Data Protection Board issued binding guidance clarifying "fairness" requirements under GDPR Article 5 specifically to machine learning systems, requiring documented bias audits every 90 days for systems affecting individual rights. Non-compliance carries EUR 10 million minimum fines.
+- **California frontier-model obligations have been in force since 1 January 2026.** SB 53 and AB 2013 both took effect on that date, adding transparency duties for frontier developers and training-data disclosure requirements. ([King & Spalding](https://www.kslaw.com/news-and-insights/new-state-ai-laws-are-effective-on-january-1-2026-but-a-new-executive-order-signals-disruption))
 
-- **California's SB 1047 Implementation (Enacted 2024, Now Enforced):** California Attorney General opened enforcement division for AI transparency requirements. First settlements require AI vendors to maintain audit logs, disclose model training data sources, and implement explainability tools by January 2027.
+- **The FTC proposed a policy statement on accuracy suppression in AI systems on 7 July 2026.** It applies the Section 5 deceptive-practices prohibition to companies marketing AI systems. Read it as the agency telling you in advance where the next cases come from. ([Federal Register](https://www.federalregister.gov/documents/2026/07/07/2026-13628/policy-statement-concerning-the-suppression-of-accuracy-in-artificial-intelligence-systems))
 
-- **OFCOM AI Broadcasting Standards Published:** UK media regulator released binding standards for AI-generated broadcast content, requiring explicit disclosures and human editorial oversight for news applications. Broadcasters face license suspension for violations.
+## Enforcement Signals
 
-## Enterprise Implications
+- **The live enforcement risk is your marketing copy, not your model card.** Operation AI Comply, launched September 2024, has continued under the current administration and has produced enforcement actions through 2025 and into 2026. Growth Cave resolved allegations in January 2026 over misrepresented AI automation capability. ([FTC](https://www.ftc.gov/news-events/news/press-releases/2024/09/ftc-announces-crackdown-deceptive-ai-claims-schemes), [Benesch](https://www.beneschlaw.com/insight/one-year-in-ftcs-operation-ai-comply-continues-under-new-administration-signaling-enduring-enforcement-focus/))
 
-- **Third-Party AI Audit Market Becoming Mandatory:** Companies can no longer self-certify AI compliance. Demand for accredited auditors under EU AI Act, NIST RMF 2.0, and FCA frameworks is creating 6-12 month assessment backlogs. Budget impact: $150K-$500K per enterprise system, recurring annually.
+- **The Workado case is the cleanest template for how this goes wrong.** The company advertised its AI content-detection tool as 98% accurate. Testing indicated roughly 53%. The FTC consent order requires it to stop making unsubstantiated claims. No high-risk classification was needed. A number in an ad was enough. ([Benesch](https://www.beneschlaw.com/insight/one-year-in-ftcs-operation-ai-comply-continues-under-new-administration-signaling-enduring-enforcement-focus/))
 
-- **Data Provenance Documentation Now Table Stakes:** Regulatory bodies across EU, UK, and US are specifically auditing training data sourcing. Companies lacking documented consent chains or using scraped public data face enforcement risk. Expect mandatory retraining costs for legacy systems and 18-24 month remediation timelines.
+- **Section 5 penalty exposure is $53,088 per violation.** The FTC raised the maximum from $51,744 effective on publication in the Federal Register on 17 January 2025. OMB guidance of 17 April 2026 means there is no 2026 inflation adjustment, so this figure stands. Per violation, in an advertising context, can mean per consumer exposure. ([Federal Register, 17 January 2025](https://www.federalregister.gov/documents/2025/01/17/2025-01361/adjustments-to-civil-penalty-amounts), [no 2026 adjustment](https://www.federalregister.gov/documents/2026/07/07/2026-13629/no-adjustment-to-civil-monetary-penalty-amounts))
 
-- **C-Suite Liability Exposure Rising:** SEC disclosure rules and UK senior management regime expansions are creating personal liability for executives overseeing AI systems. Insurance products for AI governance failures are emerging but with strict underwriting and 30-50% premium increases YoY.
+## Key Questions
 
-- **High-Risk Classification Narrowing Operations:** EU AI Act's "high-risk" definition now encompasses most B2B AI systems affecting hiring, credit, and content moderation. Classification locks companies into mandatory conformity assessments, EU technical documentation requirements, and human oversight mandates, delaying deployments 9-15 months.
+1. **Who signed off on the accuracy numbers in your marketing?** Workado turned a product-page statistic into a consent order. If a percentage appears in your copy, someone must own the test that produced it and be able to produce that test.
 
-## Key Questions for Compliance Leaders
+2. **Did your Article 50 work ship on 2 August, or did the high-risk delay swallow it?** The delay headline was loud and the carve-out was quiet. Teams that read the headline and stood down have been non-compliant for 12 days.
 
-1. **Data Accountability Gap:** Do your AI training datasets have documented consent audit trails and source validation? Regulatory bodies are now demanding this retroactively, and 70% of enterprises lack this documentation. What is your remediation timeline and which systems face enforcement risk?
-
-2. **Model Validation Infrastructure:** Are you resourced with independent model validation capabilities meeting UK FCA, NIST RMF 2.0, and EU AI Act standards, or are you dependent on third-party auditors now operating at capacity? Which models cannot get assessment appointments before September 2026 deadline?
-
-3. **Board-Level Disclosure Readiness:** Has your legal and compliance function completed AI risk inventory required for SEC disclosure rules launching July 2026? Do you have documented risk assessment, remediation tracking, and board reporting protocols in place for material AI model failures?
+3. **What did you build for SB 24-205 and where does it go now?** Colorado's impact-assessment machinery is not wasted, but it now serves a disclosure statute arriving 1 January 2027 and a different obligation set. Re-point it deliberately rather than letting it decay.
 
 ---
+
+**Method note.** This brief carries a source link on every factual claim. Where a description is a characterization rather than statutory text, it is written as such. Corrections go to agent@practicalsystems.io and are published in the next edition.
+
 *Sentinel Intelligence by Practical Systems | agent@practicalsystems.io*

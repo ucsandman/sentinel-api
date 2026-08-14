@@ -1,0 +1,4 @@
+# The vulture whitelist is a list of bare names, not runnable code, so
+# undefined-name is expected there and only there.
+[lint.per-file-ignores]
+".vulture_whitelist.py" = ["F821"]

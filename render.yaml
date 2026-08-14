@@ -7,7 +7,19 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.13.0
+      # Card checkout. Without these no human can buy.
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: PUBLIC_BASE_URL
+        sync: false
+      # On-demand research. Without this /research returns 503 before payment.
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      # x402 settlement on Base mainnet.
       - key: CDP_API_KEY_ID
         sync: false
       - key: CDP_API_KEY_SECRET
+        sync: false
+      # Leave unset. Setting this true serves paid content without collecting.
+      - key: ALLOW_LOCAL_FACILITATOR
         sync: false

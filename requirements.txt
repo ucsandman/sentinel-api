@@ -4,3 +4,5 @@ uvicorn[standard]
 cdp-sdk
 PyJWT
 cryptography
+stripe
+anthropic
