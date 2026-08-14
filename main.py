@@ -316,12 +316,17 @@ def _verify_stripe_session(session_id: str, slug: str | None) -> bool:
         raise HTTPException(
             status_code=402, detail="Could not verify that checkout session"
         )
-    if session.get("payment_status") != "paid":
+    # stripe.StripeObject is not a dict subclass in stripe>=15, so .get()
+    # raises AttributeError. Use attribute access.
+    if getattr(session, "payment_status", None) != "paid":
         raise HTTPException(status_code=402, detail="Checkout session is not paid")
-    if slug and (session.get("metadata") or {}).get("slug") != slug:
-        raise HTTPException(
-            status_code=402, detail="Checkout session was for a different resource"
-        )
+    if slug:
+        metadata = getattr(session, "metadata", None)
+        session_slug = getattr(metadata, "slug", None) if metadata is not None else None
+        if session_slug != slug:
+            raise HTTPException(
+                status_code=402, detail="Checkout session was for a different resource"
+            )
     return True
 
 

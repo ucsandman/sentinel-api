@@ -164,17 +164,54 @@ def test_session_verify_failure_does_not_leak_stripe_internals(monkeypatch):
     assert "Invalid API Key" not in r.text
 
 
-def test_stripe_session_path_rejects_unpaid_session(monkeypatch):
+def _stub_session(monkeypatch, payment_status, slug):
+    """Return a REAL stripe object, not a dict.
+
+    An earlier version of this test mocked _verify_stripe_session itself and
+    therefore never exercised stripe's object semantics. It missed that
+    StripeObject is not a dict subclass in stripe>=15, so session.get(...)
+    raised AttributeError and every returning buyer got a 500 after paying.
+    """
+    import stripe
+
     monkeypatch.setattr(main, "STRIPE_SECRET_KEY", "sk_test_x")
-    monkeypatch.setattr(
-        main,
-        "_verify_stripe_session",
-        lambda _sid, _slug: (_ for _ in ()).throw(
-            main.HTTPException(status_code=402, detail="Checkout session is not paid")
-        ),
+    session = stripe.checkout.Session.construct_from(
+        {
+            "id": "cs_test_fake",
+            "object": "checkout.session",
+            "payment_status": payment_status,
+            "metadata": {"slug": slug},
+        },
+        "sk_test_x",
     )
+    monkeypatch.setattr(
+        stripe.checkout.Session, "retrieve", staticmethod(lambda *_, **__: session)
+    )
+
+
+def test_paid_session_delivers_the_brief(monkeypatch):
+    """The money path. A buyer returning from Stripe must get what they paid for."""
+    _stub_session(monkeypatch, "paid", "bnpl")
+    r = client.get("/brief/bnpl?session_id=cs_test_fake")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["topic"] == "BNPL & Embedded Finance"
+    assert "BNPL" in body["brief"]
+
+
+def test_stripe_session_path_rejects_unpaid_session(monkeypatch):
+    _stub_session(monkeypatch, "unpaid", "bnpl")
     r = client.get("/brief/bnpl?session_id=cs_test_fake")
     assert r.status_code == 402
+    assert "not paid" in r.json()["detail"]
+
+
+def test_paid_session_for_another_brief_is_rejected(monkeypatch):
+    """A $2 session for one brief must not unlock a different one."""
+    _stub_session(monkeypatch, "paid", "ai-governance")
+    r = client.get("/brief/bnpl?session_id=cs_test_fake")
+    assert r.status_code == 402
+    assert "different resource" in r.json()["detail"]
 
 
 # ---------------------------------------------------------------------------
