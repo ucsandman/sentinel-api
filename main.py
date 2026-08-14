@@ -407,6 +407,121 @@ def load_brief(name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Human-facing pages
+# ---------------------------------------------------------------------------
+
+BASE_CSS = """
+:root {
+  --ground:#F4F5F1; --surface:#FFFFFF; --ink:#171A1D; --muted:#656B63;
+  --rule:#D8DCD3; --accent:#1D4E58; --accent-ink:#FFFFFF; --sunk:#ECEEE8;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ground:#141715; --surface:#1C201D; --ink:#E7E9E2; --muted:#8E948B;
+    --rule:#333933; --accent:#7FB6C0; --accent-ink:#10201F; --sunk:#232823;
+  }
+}
+* { box-sizing:border-box; }
+body {
+  background:var(--ground); color:var(--ink); margin:0; padding:56px 20px 80px;
+  font-family:"Segoe UI",system-ui,-apple-system,sans-serif; line-height:1.62;
+}
+main { max-width:42rem; margin:0 auto; }
+a { color:var(--accent); text-underline-offset:2px; }
+a:focus-visible { outline:2px solid var(--ink); outline-offset:2px; }
+code { font-family:ui-monospace,Consolas,monospace; font-size:0.9em; }
+footer {
+  border-top:1px solid var(--rule); margin-top:44px; padding-top:16px;
+  color:var(--muted); font-size:0.83rem;
+}
+"""
+
+BRIEF_CSS = """
+h1 { font-size:1.9rem; line-height:1.15; margin:0 0 6px; letter-spacing:-0.015em; }
+h2 {
+  font-size:1.15rem; margin:36px 0 12px; padding-bottom:6px;
+  border-bottom:1px solid var(--rule);
+}
+p { margin:0 0 14px; }
+ul { padding-left:0; list-style:none; margin:0 0 14px; }
+li { margin:0 0 16px; padding-left:16px; border-left:2px solid var(--rule); }
+li strong:first-child { color:var(--ink); }
+hr { border:0; border-top:1px solid var(--rule); margin:32px 0; }
+.receipt {
+  background:var(--sunk); border-left:3px solid var(--accent);
+  padding:12px 16px; margin:0 0 28px; font-size:0.9rem; color:var(--muted);
+}
+.receipt strong { color:var(--ink); }
+"""
+
+
+LANDING_CSS = """
+main { display:flex; flex-direction:column; gap:30px; max-width:40rem; }
+h1 { font-size:2rem; margin:0; letter-spacing:-0.015em; }
+.sub { color:var(--muted); margin:6px 0 0; }
+.product {
+  background:var(--surface); border:1px solid var(--rule);
+  padding:20px 22px; display:flex; flex-direction:column; gap:10px;
+}
+.product h2 { font-size:1.15rem; margin:0; }
+.product p { margin:0; color:var(--muted); font-size:0.95rem; }
+.row { display:flex; flex-wrap:wrap; align-items:center; gap:14px; margin-top:4px; }
+a.buy {
+  background:var(--accent); color:var(--accent-ink); text-decoration:none;
+  padding:10px 20px; font-weight:600; font-size:0.95rem; display:inline-block;
+}
+a.buy:hover { opacity:0.9; }
+.unavailable { color:var(--muted); font-style:italic; font-size:0.92rem; }
+.agent, .note { color:var(--muted); font-size:0.83rem; }
+footer { margin-top:0; }
+"""
+
+
+def page_shell(title: str, body: str, extra_css: str = "") -> str:
+    return f"<title>{title}</title>\n<style>{BASE_CSS}{extra_css}</style>\n{body}"
+
+
+def wants_html(request: Request) -> bool:
+    """True for a browser, False for an agent.
+
+    An agent either sends X-PAYMENT or asks for JSON. Everything else that
+    accepts HTML is a person looking at a page.
+    """
+    if request.headers.get("X-PAYMENT"):
+        return False
+    accept = request.headers.get("accept", "")
+    if "application/json" in accept:
+        return False
+    return "text/html" in accept
+
+
+def render_brief_page(slug: str, item: dict) -> str:
+    """The page a paying human sees. Previously they got escaped JSON."""
+    import markdown
+
+    body_html = markdown.markdown(
+        load_brief(slug), extensions=["extra", "sane_lists", "nl2br"]
+    )
+    return page_shell(
+        item["title"],
+        f"""<main>
+  <div class="receipt">
+    <strong>Paid.</strong> {item["price_usd"]} for the {item["title"]} brief.
+    Stripe emails your receipt. This page stays available at the link in your
+    address bar, so bookmark it if you want to come back.
+  </div>
+  {body_html}
+  <footer>
+    Need this as data? Request the same URL with
+    <code>Accept: application/json</code>.<br>
+    <a href="/">All briefs</a> &middot; Corrections to agent@practicalsystems.io
+  </footer>
+</main>""",
+        BRIEF_CSS,
+    )
+
+
+# ---------------------------------------------------------------------------
 # On-demand research via ant CLI
 # ---------------------------------------------------------------------------
 
@@ -488,47 +603,9 @@ async def landing():
     </div>
   </section>""")
 
-    return f"""
-<title>Sentinel Intelligence</title>
-<style>
-  :root {{
-    --ground: #F4F5F1; --surface: #FFFFFF; --ink: #171A1D; --muted: #656B63;
-    --rule: #D8DCD3; --accent: #1D4E58; --accent-ink: #FFFFFF;
-  }}
-  @media (prefers-color-scheme: dark) {{
-    :root {{
-      --ground: #141715; --surface: #1C201D; --ink: #E7E9E2; --muted: #8E948B;
-      --rule: #333933; --accent: #7FB6C0; --accent-ink: #10201F;
-    }}
-  }}
-  * {{ box-sizing: border-box; }}
-  body {{
-    background: var(--ground); color: var(--ink); margin: 0; padding: 56px 20px 80px;
-    font-family: "Segoe UI", system-ui, -apple-system, sans-serif; line-height: 1.6;
-  }}
-  main {{ max-width: 40rem; margin: 0 auto; display: flex; flex-direction: column; gap: 30px; }}
-  h1 {{ font-size: 2rem; margin: 0; letter-spacing: -0.015em; }}
-  .sub {{ color: var(--muted); margin: 6px 0 0; }}
-  .product {{
-    background: var(--surface); border: 1px solid var(--rule);
-    padding: 20px 22px; display: flex; flex-direction: column; gap: 10px;
-  }}
-  .product h2 {{ font-size: 1.15rem; margin: 0; }}
-  .product p {{ margin: 0; color: var(--muted); font-size: 0.95rem; }}
-  .row {{ display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 4px; }}
-  a.buy {{
-    background: var(--accent); color: var(--accent-ink); text-decoration: none;
-    padding: 10px 20px; font-weight: 600; font-size: 0.95rem; display: inline-block;
-  }}
-  a.buy:hover {{ opacity: 0.9; }}
-  a.buy:focus-visible {{ outline: 2px solid var(--ink); outline-offset: 2px; }}
-  .unavailable {{ color: var(--muted); font-style: italic; font-size: 0.92rem; }}
-  .agent, .note {{ color: var(--muted); font-size: 0.83rem; }}
-  code {{ font-family: ui-monospace, Consolas, monospace; font-size: 0.9em; }}
-  footer {{ border-top: 1px solid var(--rule); padding-top: 16px; color: var(--muted); font-size: 0.83rem; }}
-  a {{ color: var(--accent); }}
-</style>
-<main>
+    return page_shell(
+        "Sentinel Intelligence",
+        f"""<main>
   <header>
     <h1>Sentinel Intelligence</h1>
     <p class="sub">Sourced fintech and AI governance briefs. Every claim carries a link.
@@ -549,8 +626,9 @@ async def landing():
     <a href="/.well-known/x402.json">x402 discovery</a><br>
     Sentinel Intelligence by Practical Systems &middot; agent@practicalsystems.io
   </footer>
-</main>
-"""
+</main>""",
+        LANDING_CSS,
+    )
 
 
 @app.get("/.well-known/x402.json")
@@ -713,6 +791,12 @@ async def brief(request: Request, slug: str):
     result = await require_payment(request, item["price_usd"], slug=slug)
     if isinstance(result, JSONResponse):
         return result
+
+    # A person who just paid with a card gets a readable page. An agent gets
+    # JSON. Serving escaped JSON to a browser is how the first real buyer was
+    # greeted, and it looked broken.
+    if wants_html(request):
+        return HTMLResponse(render_brief_page(slug, item))
 
     return JSONResponse(
         content={

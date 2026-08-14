@@ -192,11 +192,57 @@ def _stub_session(monkeypatch, payment_status, slug):
 def test_paid_session_delivers_the_brief(monkeypatch):
     """The money path. A buyer returning from Stripe must get what they paid for."""
     _stub_session(monkeypatch, "paid", "bnpl")
-    r = client.get("/brief/bnpl?session_id=cs_test_fake")
+    r = client.get(
+        "/brief/bnpl?session_id=cs_test_fake", headers={"Accept": "application/json"}
+    )
     assert r.status_code == 200
     body = r.json()
     assert body["topic"] == "BNPL & Embedded Finance"
     assert "BNPL" in body["brief"]
+
+
+def test_browser_gets_a_rendered_page_not_raw_json(monkeypatch):
+    """The first real buyer got escaped JSON in a browser. Never again.
+
+    A person paying by card lands here from Stripe with a browser Accept
+    header. They must get readable HTML, not a JSON blob full of \\n.
+    """
+    _stub_session(monkeypatch, "paid", "bnpl")
+    r = client.get(
+        "/brief/bnpl?session_id=cs_test_fake",
+        headers={"Accept": "text/html,application/xhtml+xml"},
+    )
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("text/html")
+    body = r.text
+    assert "<h1>" in body  # markdown was rendered
+    assert "\\n" not in body  # no escaped newlines
+    assert '{"brief"' not in body  # not a JSON dump
+    assert "Paid." in body  # receipt line for the buyer
+    assert 'href="https://www.orrick.com' in body or "href=" in body
+
+
+def test_agent_with_x_payment_still_gets_json(monkeypatch):
+    """An agent must never be handed HTML just because it accepts everything."""
+    monkeypatch.setattr(main, "FACILITATOR_MODE", "cdp")
+    r = client.get("/brief/bnpl", headers={"Accept": "*/*"})
+    # No payment supplied, so this is the 402 path, but it must be JSON.
+    assert r.status_code == 402
+    assert "json" in r.headers["content-type"]
+
+
+def test_wants_html_logic():
+    from starlette.datastructures import Headers
+
+    class Req:
+        def __init__(self, headers):
+            self.headers = Headers(headers)
+
+    assert main.wants_html(Req({"accept": "text/html"})) is True
+    assert main.wants_html(Req({"accept": "application/json"})) is False
+    assert main.wants_html(Req({"accept": "*/*"})) is False
+    # An agent that sends X-PAYMENT gets JSON even if it accepts HTML.
+    assert main.wants_html(Req({"accept": "text/html", "x-payment": "abc"})) is False
 
 
 def test_stripe_session_path_rejects_unpaid_session(monkeypatch):

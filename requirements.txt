@@ -6,3 +6,4 @@ PyJWT
 cryptography
 stripe
 anthropic
+markdown
