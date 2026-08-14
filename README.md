@@ -128,6 +128,24 @@ All configuration is via `.env`. See `.env.example` for the full list.
 
 ---
 
+## Deploying
+
+The service runs on Render at <https://sentinel-api-37jd.onrender.com> and deploys on push to `main`.
+
+`setup_render.py` configures it and then checks whether it can actually take money. It reads keys from a secrets file, so you never paste them, and it never prints their values.
+
+```bash
+python setup_render.py                 # dry run, shows what would change
+python setup_render.py --apply         # write the env vars and redeploy
+python setup_render.py --verify-only   # just read /health and report
+```
+
+It looks for `RENDER_API_KEY`, `STRIPE_SECRET_KEY` and `ANTHROPIC_API_KEY` in `--secrets <path>`, then `./.env`, then `~/.claude/.secrets.env`. Environment variables override the file.
+
+To take **real** money you need a live Stripe key (`sk_live_...`). A `sk_test_...` key produces a working checkout page that never moves funds, and `setup_render.py` prints which mode it found.
+
+---
+
 ## Adding a brief
 
 1. Write `briefs/<slug>.md`. Include an `**Edition:** YYYY-MM-DD` line and at least six source links.
