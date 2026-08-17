@@ -76,6 +76,41 @@ curl -X POST http://localhost:8000/research \
   -d '{"topic": "embedded finance licensing in Brazil"}'
 ```
 
+Response:
+
+```json
+{
+  "brief": "# Embedded Finance Licensing in Brazil\n...\n## Sources\n\n- **2026-08-11** BEYOND MEAT, INC.  (BYND)  (CIK 0001655210) filed a 8-K. ([SEC EDGAR](https://www.sec.gov/Archives/edgar/data/1655210/000165521026000057/bynd-20260811.htm))",
+  "topic": "embedded finance licensing in Brazil",
+  "timestamp": "2026-08-16T12:00:00.000000",
+  "generated_by": "Sentinel Intelligence / Practical Systems",
+  "sources": [
+    {
+      "company": "BEYOND MEAT, INC.  (BYND)  (CIK 0001655210)",
+      "form": "8-K",
+      "filed": "2026-08-11",
+      "url": "https://www.sec.gov/Archives/edgar/data/1655210/000165521026000057/bynd-20260811.htm"
+    }
+  ],
+  "sources_note": "The Sources section lists 1 SEC filing from the last EDGAR_LOOKBACK_DAYS days whose text contains this phrase."
+}
+```
+
+The brief is grounded in SEC EDGAR full text search over the last `EDGAR_LOOKBACK_DAYS`
+days (90 by default, see `main.py`). EDGAR
+indexes SEC filers only, so coverage is strong for named companies and thin for
+policy topics with no filer behind them. When nothing matches, or when EDGAR is
+unreachable, the brief is still delivered: `sources` comes back as `[]` and
+`sources_note` says which of the two happened. EDGAR needs no key and is never
+allowed to fail a paid request.
+
+The `sources` entry above is a real filing, live-verified at HTTP 200 before it
+went into this doc; it is here to show shape, not because Beyond Meat has
+anything to do with Brazilian fintech licensing. EDGAR's own honesty rule
+applies to the docs too: a filing matching the phrase is not proof it is about
+the topic, which is exactly what `sources_note` and the system prompt tell the
+buyer.
+
 Returns 503 and takes no payment when `ANTHROPIC_API_KEY` is unset.
 
 ---

@@ -23,10 +23,11 @@ Two rules enforced here:
      ALLOW_LOCAL_FACILITATOR is set.
 """
 
+import asyncio
 import json
 import os
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # Imported at module level on purpose. If this is missing the app must fail to
@@ -83,6 +84,25 @@ PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "http://localhost:8000").rst
 # subprocess is not installed on the Render host, so it took payment and 500'd.
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 RESEARCH_MODEL = os.environ.get("RESEARCH_MODEL", "claude-haiku-4-5-20251001")
+
+# SEC EDGAR full text search grounds /research in real filings. It is the JSON
+# backend the official search UI at sec.gov/edgar/search calls; it is not
+# named on sec.gov's API catalog page, so treat it as stable but unofficial.
+# No key, no registration. Access is gated on the User-Agent carrying a real
+# contact, exactly as sec.gov's webmaster FAQ requires. A default or missing
+# agent string gets an Akamai HTML block page with no CORS headers and no
+# JSON, so a 403 here must never be parsed as an API error.
+EDGAR_SEARCH_URL = "https://efts.sec.gov/LATEST/search-index"
+EDGAR_USER_AGENT = "Practical Systems Sentinel Intelligence agent@practicalsystems.io"
+EDGAR_LOOKBACK_DAYS = 90
+# Six, to match the citation floor the catalog briefs are held to in test_main.
+EDGAR_MAX_FILINGS = 6
+# httpx's timeout= is PER OPERATION (connect/read/write/pool each get this),
+# not a total budget, so it alone cannot bound a stalled request.
+# fetch_sec_filings also wraps the whole search in
+# asyncio.wait_for(EDGAR_TOTAL_TIMEOUT_S) so a stall cannot run unbounded.
+EDGAR_TIMEOUT_S = 5.0
+EDGAR_TOTAL_TIMEOUT_S = 8.0
 
 # The local facilitator verifies signatures but cannot move funds on chain.
 # Serving paid content in that mode gives the product away, so it must be
@@ -525,7 +545,7 @@ def render_brief_page(slug: str, item: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# On-demand research via ant CLI
+# On-demand research, grounded in SEC filings
 # ---------------------------------------------------------------------------
 
 RESEARCH_SYSTEM_PROMPT = (
@@ -534,8 +554,156 @@ RESEARCH_SYSTEM_PROMPT = (
     "Format: Critical Alerts, Regulatory Pulse, Market Moves, Key Questions. "
     "Be specific, cite real companies and developments, avoid fluff. "
     "State plainly when you are uncertain about a fact rather than asserting it. "
+    "When SEC filings are supplied, cite them inline as markdown links using the "
+    "exact URLs given. Never invent a sec.gov URL, an accession number, or a "
+    "filing date. "
     "Maximum 800 words. No em dashes."
 )
+
+
+def edgar_phrases(topic: str) -> list[str]:
+    """Phrase queries to try against EDGAR, most specific first.
+
+    EDGAR turns a quoted q into an Elasticsearch match_phrase and an unquoted
+    one into an AND over every word, stopwords included. The unquoted form is
+    unusable here: "buy now pay later regulation" unquoted returns Frontier
+    Airlines and IM Cannabis, because some 200 page 10-Q happens to contain all
+    five words somewhere. Quoting is what makes a hit mean anything.
+
+    A whole topic quoted verbatim can match nothing, or match only a marginal
+    filing, so the first three words are always tried too. That is still a
+    prefix of what the buyer asked for, so a hit still genuinely contains
+    their words in their order.
+    """
+    words = topic.replace('"', " ").split()
+    phrases = [" ".join(words)]
+    if len(words) > 3:
+        phrases.append(" ".join(words[:3]))
+    return phrases
+
+
+def parse_edgar_hits(payload: dict) -> list[dict]:
+    """Flatten EDGAR search hits into rows that can be cited.
+
+    Three reformats here fail silently, so they are done once, here:
+      - "_id" is "ACCESSION:FILENAME", so the filename needs splitting out.
+      - "ciks" holds zero padded 10 digit strings, but the Archives path wants
+        the integer form, so "0001655210" has to become 1655210.
+      - "adsh" carries dashes that the Archives path does not.
+    A wrong URL still renders as a working looking link, so a mistake here ships
+    a 404 to someone who paid $10 rather than an error anyone would notice.
+
+    Dedupe on the registrant (first CIK), not the accession. One filing can
+    match on several of its documents, which accession-only dedupe would
+    catch, but a single registrant can also spread the same story across
+    several accessions -- measured live on a real 63-hit payload, two of six
+    buy-now-pay-later hits were the same ETF trust's prospectus exhibits under
+    different accessions. Deduping on CIK catches both: one filer, one row.
+    """
+    rows: list[dict] = []
+    seen_ciks: set[int] = set()
+    for hit in payload.get("hits", {}).get("hits", []):
+        src = hit.get("_source") or {}
+        adsh = src.get("adsh")
+        ciks = src.get("ciks") or []
+        names = src.get("display_names") or []
+        filed = src.get("file_date")
+        doc_id = hit.get("_id") or ""
+        # Anything missing gets dropped rather than guessed at. A half built
+        # citation is worse than one fewer citation.
+        if not (adsh and ciks and names and filed) or ":" not in doc_id:
+            continue
+        try:
+            cik = int(ciks[0])
+        except (TypeError, ValueError):
+            continue
+        if cik in seen_ciks:
+            continue
+        seen_ciks.add(cik)
+        accession = adsh.replace("-", "")
+        filename = doc_id.split(":", 1)[1]
+        # Joint filings list every co-registrant in parallel arrays. Taking
+        # names[0] would quietly drop the other filers; three is enough to be
+        # honest about co-filers without a several-hundred-character bullet.
+        company = "; ".join(names[:3])
+        if len(names) > 3:
+            company += " and others"
+        rows.append(
+            {
+                "company": company,
+                "form": src.get("form") or "filing",
+                "filed": filed,
+                "url": (
+                    "https://www.sec.gov/Archives/edgar/data/"
+                    f"{cik}/{accession}/{filename}"
+                ),
+            }
+        )
+        if len(rows) == EDGAR_MAX_FILINGS:
+            break
+    return rows
+
+
+def filings_markdown(filings: list[dict]) -> str:
+    """Source lines in the same shape the catalog briefs use."""
+    return "\n".join(
+        f"- **{f['filed']}** {f['company']} filed a {f['form']}. "
+        f"([SEC EDGAR]({f['url']}))"
+        for f in filings
+    )
+
+
+async def fetch_sec_filings(topic: str) -> list[dict] | None:
+    """Recent SEC filings whose text contains the buyer's phrase.
+
+    Returns None when the search itself failed, and [] when it ran and matched
+    nothing. Those are different facts and the caller reports them differently.
+
+    Never raises. This is a free enhancement to a brief that has already been
+    paid for, and a government search engine having a bad minute is not a
+    reason to withhold the thing that was bought.
+    """
+    try:
+        import httpx
+
+        end = datetime.utcnow().date()
+        start = end - timedelta(days=EDGAR_LOOKBACK_DAYS)
+
+        async def run() -> list[dict]:
+            best: list[dict] = []
+            async with httpx.AsyncClient(
+                timeout=EDGAR_TIMEOUT_S,
+                headers={"User-Agent": EDGAR_USER_AGENT},
+                follow_redirects=True,
+            ) as client:
+                # A thin non-empty result is still worth trying to beat: the
+                # whole phrase quoted can match a single marginal filing while
+                # its first three words match dozens, so anything under half
+                # the citation floor keeps trying the shorter phrase. (Live
+                # example: "buy now pay later regulation" quoted whole matches
+                # one filing; its first three words match 63.)
+                for phrase in edgar_phrases(topic):
+                    resp = await client.get(
+                        EDGAR_SEARCH_URL,
+                        params={
+                            "q": f'"{phrase}"',
+                            "dateRange": "custom",
+                            "startdt": start.isoformat(),
+                            "enddt": end.isoformat(),
+                        },
+                    )
+                    resp.raise_for_status()
+                    filings = parse_edgar_hits(resp.json())
+                    if len(filings) > len(best):
+                        best = filings
+                    if len(best) >= EDGAR_MAX_FILINGS // 2:
+                        break
+            return best
+
+        return await asyncio.wait_for(run(), timeout=EDGAR_TOTAL_TIMEOUT_S)
+    except Exception as exc:
+        print(f"[edgar] search failed: {type(exc).__name__}: {str(exc)[:200]}")
+        return None
 
 
 def research_available() -> bool:
@@ -543,13 +711,32 @@ def research_available() -> bool:
     return bool(ANTHROPIC_API_KEY)
 
 
-async def generate_research_brief(topic: str) -> str:
+async def generate_research_brief(topic: str, filings: list[dict] | None) -> str:
     """Generate a fresh intelligence brief with the Anthropic SDK.
 
     This used to shell out to an `ant` CLI that is not installed on the Render
     host, so a paid request charged the caller and then returned a 500.
+
+    `filings` is whatever SEC EDGAR full text search returned, or None when
+    that search failed. Either way the brief gets written. When there are
+    filings they go into the prompt and are also appended verbatim as a
+    Sources section, so the citations exist whether or not the model chose to
+    use them.
     """
     from anthropic import AsyncAnthropic
+
+    if filings:
+        user_prompt = (
+            f"Write an intelligence brief on: {topic}\n\n"
+            f"These SEC filings from the last {EDGAR_LOOKBACK_DAYS} days contain "
+            "the phrase the buyer asked about. They come from EDGAR full text "
+            "search, so a filing mentioning the phrase is not proof the filing "
+            "is about it. Use the ones that are genuinely relevant, cite them "
+            "by their exact URL, and ignore the rest.\n\n"
+            f"{filings_markdown(filings)}"
+        )
+    else:
+        user_prompt = f"Write an intelligence brief on: {topic}"
 
     client = AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
     try:
@@ -557,9 +744,7 @@ async def generate_research_brief(topic: str) -> str:
             model=RESEARCH_MODEL,
             max_tokens=2000,
             system=RESEARCH_SYSTEM_PROMPT,
-            messages=[
-                {"role": "user", "content": f"Write an intelligence brief on: {topic}"}
-            ],
+            messages=[{"role": "user", "content": user_prompt}],
         )
     except Exception as exc:
         raise HTTPException(
@@ -575,7 +760,19 @@ async def generate_research_brief(topic: str) -> str:
         raise HTTPException(
             status_code=502, detail="Research generation returned no content"
         )
-    return text.strip()
+    text = text.strip()
+
+    # Append the filings the model was given, not the ones it claims to have
+    # used. This is what makes the citation guarantee structural instead of a
+    # request the model is free to ignore.
+    if filings:
+        text += (
+            "\n\n---\n\n## Sources\n\n"
+            f"SEC filings from the last {EDGAR_LOOKBACK_DAYS} days whose text "
+            "contains the phrase searched for. Retrieved from EDGAR full text "
+            "search, not curated.\n\n" + filings_markdown(filings)
+        )
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -617,7 +814,9 @@ async def landing():
 {"".join(cards)}
   <section class="product">
     <h2>On-demand research</h2>
-    <p>A fresh brief on any fintech or AI governance topic.</p>
+    <p>A fresh brief on any fintech or AI governance topic, grounded in SEC
+    filings from the last {EDGAR_LOOKBACK_DAYS} days when the topic has SEC
+    filers behind it.</p>
     <div class="row">
       <span class="agent">Agents: <code>POST /research</code> with x402, $10.00 USDC.
       Body <code>{{"topic": "..."}}</code></span>
@@ -832,12 +1031,39 @@ async def research(request: Request, body: ResearchRequest):
     result = await require_payment(request, "$10.00")
     if isinstance(result, JSONResponse):
         return result
-    brief = await generate_research_brief(body.topic)
+
+    # None means the search itself failed. [] means it ran and matched
+    # nothing. Different facts, so the buyer is told which one happened.
+    filings = await fetch_sec_filings(body.topic)
+    if filings is None:
+        sources_note = (
+            "SEC EDGAR full text search was unreachable, so this brief carries "
+            "no filing citations. Its claims come from the model, not from a "
+            "filing."
+        )
+    elif not filings:
+        sources_note = (
+            f"No SEC filing in the last {EDGAR_LOOKBACK_DAYS} days contains this "
+            "phrase. EDGAR indexes SEC filers only, so a topic with no filer "
+            "behind it returns nothing. This brief carries no filing citations."
+        )
+    else:
+        count = len(filings)
+        sources_note = (
+            f"The Sources section lists {count} SEC "
+            f"{'filing' if count == 1 else 'filings'} from the last "
+            f"{EDGAR_LOOKBACK_DAYS} days whose text contains this phrase."
+        )
+
+    brief = await generate_research_brief(body.topic, filings)
     return JSONResponse(
         content={
             "brief": brief,
             "topic": body.topic,
             "timestamp": datetime.utcnow().isoformat(),
             "generated_by": "Sentinel Intelligence / Practical Systems",
+            # Always a list, never null, so a consumer indexing it cannot crash.
+            "sources": filings or [],
+            "sources_note": sources_note,
         }
     )
